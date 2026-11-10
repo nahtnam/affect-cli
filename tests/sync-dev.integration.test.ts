@@ -21,10 +21,10 @@ const baseValues = {
   CONVEX_DEPLOYMENT: "dev:synthetic-dev-123",
   CONVEX_DEPLOY_KEY: deployKey,
   DISABLED_TOKEN: "",
-  NEXT_PUBLIC_CONVEX_SITE_URL: site,
-  NEXT_PUBLIC_CONVEX_URL: cloud,
-  NEXT_PUBLIC_UNRELATED: "synthetic-client-value",
   SERVER_SECRET: secret,
+  VITE_CONVEX_SITE_URL: site,
+  VITE_CONVEX_URL: cloud,
+  VITE_UNRELATED: "synthetic-client-value",
 };
 
 const declaration = `const string = (isOptional: "required" | "optional") => ({
@@ -60,7 +60,7 @@ interface Options {
 const fixture = async (options: Options = {}) => {
   const f = await makeFixture({ values: options.values ?? baseValues });
   active.push(f);
-  await mkdir(path.join(f.root, "convex"));
+  await mkdir(path.join(f.root, "convex"), { recursive: true });
   await writeFile(path.join(f.root, "convex", "env.config.ts"), options.declaration ?? declaration);
   await writeFile(
     path.join(f.root, "convex", "convex.config.ts"),
@@ -147,6 +147,24 @@ describe("development environment sync through the built CLI", () => {
         await f.cleanup();
       }),
     );
+  });
+
+  it.each([
+    ["VITE_CONVEX_URL", cloud],
+    ["VITE_CONVEX_SITE_URL", site],
+  ])("does not fill missing %s from the inherited environment", async (name, inherited) => {
+    const values =
+      name === "VITE_CONVEX_URL"
+        ? (({ VITE_CONVEX_URL: _omitted, ...rest }) => rest)(baseValues)
+        : (({ VITE_CONVEX_SITE_URL: _omitted, ...rest }) => rest)(baseValues);
+
+    const f = await fixture({ values });
+
+    const result = run(f, false, { [name]: inherited });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Development profile requires");
+    await expect(requests(f)).resolves.toHaveLength(0);
+    expectSecretFree(f, result);
   });
 
   it("loads a schema-only TypeScript module without generated files or app config", async () => {
@@ -281,8 +299,8 @@ describe("development environment sync through the built CLI", () => {
   it.each([
     "CONVEX_DEPLOY_KEY",
     "DOTENV_PRIVATE_KEY",
-    "NEXT_PUBLIC_TOKEN",
-    "NEXT_PUBLIC_apiToken",
+    "VITE_TOKEN",
+    "VITE_apiToken",
     "NODE_OPTIONS",
   ])("rejects declared %s before provider access", async (name) => {
     const f = await fixture({
