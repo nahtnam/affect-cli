@@ -1,6 +1,6 @@
 # affect-cli
 
-Shared environment and deployment commands for [Affect](https://github.com/ludicroushq/affect). Requires Bun 1.4.2 or later and a project-local Convex CLI.
+Shared environment and deployment commands for Affect projects. Requires Bun 1.4.2 or later and a project-local Convex CLI.
 
 ```sh
 bun add --dev --exact affect-cli
@@ -52,4 +52,4 @@ bun run changeset version
 bun run release
 ```
 
-For automated releases, commit a changeset with each releasable change. The release workflow opens a version PR; merging it publishes to npm. Configure npm's GitHub trusted publisher for `ludicroushq/affect-cli`, workflow `release.yml`, with direct publishing enabled. No npm token is needed. `bun run release` remains available for an intentional manual release.
+For automated releases, commit a changeset with each releasable change. The release workflow opens a version PR; merging it publishes to npm. Configure npm's GitHub trusted publisher for `nahtnam/affect-cli`, workflow `release.yml`, with direct publishing enabled. No npm token is needed. `bun run release` remains available for an intentional manual release.
