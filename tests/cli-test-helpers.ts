@@ -10,6 +10,33 @@ interface FixtureOptions {
   environment?: string;
   values?: Record<string, string>;
   convexMode?: string;
+  buildExitStatus?: number;
+  provider?: {
+    callbackCloud?: string;
+    callbackSite?: string;
+    deploymentType?: "preview" | "prod";
+    failPath?: string;
+    missingCallback?: "cloud" | "site";
+    redirectPath?: string;
+    responses?: ProviderResponses;
+  };
+}
+
+interface DeploymentInfoResponse {
+  deploymentType?: string;
+  id?: number;
+  kind?: "cloud" | "selfHosted";
+  projectId?: number;
+  teamId?: number;
+}
+
+interface ProviderResponses {
+  "/api/deployment/url_for_key"?: string | { unexpected: string };
+  "/api/v1/deployment_info"?: DeploymentInfoResponse;
+  "/api/v1/get_canonical_urls"?: {
+    convexCloudUrl: string;
+    convexSiteUrl: string;
+  };
 }
 
 export interface Fixture {
@@ -22,6 +49,7 @@ export interface Fixture {
   convexHttpBody: string;
   convexCount: string;
   convexMode: string;
+  providerOptions: string;
   cleanup: () => Promise<void>;
 }
 
@@ -65,6 +93,8 @@ export const makeFixture = async ({
   environment = "development",
   values,
   convexMode = "",
+  buildExitStatus = 0,
+  provider = {},
 }: FixtureOptions = {}): Promise<Fixture> => {
   const root = await mkdtemp(path.join(tmpdir(), "affect-cli-"));
   const convexBin = path.join(root, "node_modules", ".bin", "convex");
@@ -75,6 +105,7 @@ export const makeFixture = async ({
   const convexPreload = path.join(root, "convex-http-preload.mjs");
   const convexLog = path.join(root, "convex.log");
   const convexCount = path.join(root, "convex.count");
+  const providerOptions = path.join(root, "fake-provider.json");
   await mkdir(path.dirname(convexBin), { recursive: true });
   await symlink(cliEntry, affectBin);
   await mkdir(convexInputDir, { recursive: true });
@@ -82,18 +113,63 @@ export const makeFixture = async ({
   await mkdir(path.join(root, ".home"), { recursive: true });
   await mkdir(path.join(root, ".tmp"), { recursive: true });
   await writeFile(
+    providerOptions,
+    JSON.stringify({
+      callbackCloud: provider.callbackCloud ?? "https://callback.convex.cloud",
+      callbackSite: provider.callbackSite ?? "https://callback.convex.site",
+      convexHttpBody,
+      convexHttpLog,
+      deploymentType: provider.deploymentType ?? (environment === "preview" ? "preview" : "prod"),
+      failPath: provider.failPath ?? "",
+      missingCallback: provider.missingCallback ?? "",
+      redirectPath: provider.redirectPath ?? "",
+      responses: provider.responses ?? {},
+    }),
+  );
+  await writeFile(
     convexPreload,
-    `const log = process.env.AFFECT_FAKE_CONVEX_HTTP_LOG;
-const bodyFile = process.env.AFFECT_FAKE_CONVEX_HTTP_BODY;
-if (log && bodyFile) {
+    `const root = process.cwd();
+const options = await Bun.file(root + "/fake-provider.json").json();
+if (process.env.AFFECT_FAKE_DOTENV_PASS === "1") {
+  const source = await Bun.file(root + "/.env").text().catch(() => "");
+  for (const line of source.split(String.fromCharCode(10))) {
+    const separator = line.indexOf("=");
+    if (separator < 1) continue;
+    const name = line.slice(0, separator);
+    if (process.env[name] === undefined) process.env[name] = line.slice(separator + 1);
+  }
+}
+{
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const body = await request.text();
-    await Bun.write(bodyFile, body);
-    await Bun.write(log, request.url + "\\n" + (request.headers.get("authorization") ?? "") + "\\n");
-    return new Response(null, {
-      status: process.env.AFFECT_FAKE_CONVEX_MODE === "fail-env-set" ? 503 : 200,
-    });
+    const url = new URL(request.url);
+    const entry = {
+      authorization: request.headers.get("authorization") ?? "",
+      body: body ? JSON.parse(body) : null,
+      method: request.method,
+      path: url.pathname,
+      redirect: request.redirect,
+      url: request.url,
+    };
+    await Bun.write(options.convexHttpLog, (await Bun.file(options.convexHttpLog).text().catch(() => "")) + JSON.stringify(entry) + "\\n");
+    if (url.pathname === options.failPath) throw new Error("synthetic provider failure");
+    if (url.pathname === options.redirectPath) return new Response(null, { status: 307, headers: { location: "https://redirect.invalid" } });
+    const defaults = {
+      "/api/deployment/url_for_key": options.callbackCloud,
+      "/api/deployment/team_and_project_for_key": { team: "synthetic-team", teamId: 11, project: "synthetic-project", projectId: 22 },
+      "/api/deployment/authorize_preview": { deploymentName: "synthetic-preview", adminKey: "preview:synthetic-team:synthetic-project|synthetic-admin-key", deploymentType: "preview", isDefault: false, reference: "feature/fixture", url: options.callbackCloud },
+      "/api/v1/deployment_info": { kind: "cloud", deploymentType: options.deploymentType, id: 33, teamId: 11, projectId: 22 },
+      "/api/v1/get_canonical_urls": { convexCloudUrl: options.callbackCloud, convexSiteUrl: options.callbackSite },
+      "/api/v1/update_environment_variables": null,
+    };
+    if (url.pathname === "/api/v1/update_environment_variables") {
+      await Bun.write(options.convexHttpBody, body);
+      return new Response(null, { status: options.failPath === url.pathname ? 503 : 200 });
+    }
+    if (!Object.hasOwn(defaults, url.pathname)) return new Response(null, { status: 404 });
+    const value = Object.hasOwn(options.responses, url.pathname) ? options.responses[url.pathname] : defaults[url.pathname];
+    return Response.json(value);
   };
 }
 `,
@@ -103,42 +179,48 @@ if (log && bodyFile) {
     convexBin,
     `#!/bin/sh
 set -eu
+LOG=${JSON.stringify(convexLog)}
+COUNT=${JSON.stringify(convexCount)}
+INPUT_DIR=${JSON.stringify(convexInputDir)}
+ENV_LOG=${JSON.stringify(path.join(root, "native-env.log"))}
+CWD_LOG=${JSON.stringify(path.join(root, "native-cwd.log"))}
+MODE=${JSON.stringify(convexMode)}
+PRELOAD=${JSON.stringify(convexPreload)}
+CALLBACK_CLOUD=${JSON.stringify(provider.callbackCloud ?? "https://callback.convex.cloud")}
+CALLBACK_SITE=${JSON.stringify(provider.callbackSite ?? "https://callback.convex.site")}
+MISSING_CALLBACK=${JSON.stringify(provider.missingCallback ?? "")}
 count=0
-if [ -f "$AFFECT_FAKE_CONVEX_COUNT" ]; then
-  count=$(cat "$AFFECT_FAKE_CONVEX_COUNT")
-fi
-printf '%s\\n' "$((count + 1))" > "$AFFECT_FAKE_CONVEX_COUNT"
-printf '%s\\n' "$*" >> "$AFFECT_FAKE_CONVEX_LOG"
-printf 'CONVEX_DEPLOY_KEY=%s\\n' "\${CONVEX_DEPLOY_KEY-}" >> "$AFFECT_FAKE_CONVEX_LOG"
-printf 'CONVEX_AGENT_MODE=%s\\n' "\${CONVEX_AGENT_MODE-}" >> "$AFFECT_FAKE_CONVEX_LOG"
+if [ -f "$COUNT" ]; then count=$(cat "$COUNT"); fi
+printf '%s\\n' "$((count + 1))" > "$COUNT"
+printf '%s\\n' "$*" >> "$LOG"
+printf 'CONVEX_DEPLOY_KEY=%s\\n' "\${CONVEX_DEPLOY_KEY-}" >> "$LOG"
+printf 'CONVEX_AGENT_MODE=%s\\n' "\${CONVEX_AGENT_MODE-}" >> "$LOG"
 case "\${1-}" in
   init)
-    if [ "\${AFFECT_FAKE_CONVEX_MODE-}" = bad-init ]; then
+    if [ "$MODE" = bad-init ]; then
       printf '%s\\n' 'CONVEX_DEPLOYMENT=named:fixture' > .env.local
     else
       printf '%s\\n' 'CONVEX_DEPLOYMENT=anonymous:fixture' > .env.local
     fi
     ;;
   env)
-    cat > "$AFFECT_FAKE_CONVEX_INPUT_DIR/$count"
-    if [ "\${AFFECT_FAKE_CONVEX_MODE-}" = fail-env-set ]; then exit 23; fi
+    cat > "$INPUT_DIR/$count"
+    if [ "$MODE" = fail-env-set ]; then exit 23; fi
     ;;
   deploy)
-    if [ "\${AFFECT_FAKE_CONVEX_MODE-}" = fail-deploy ]; then exit 24; fi
-    if [ "\${AFFECT_FAKE_CONVEX_MODE-}" = run-build ]; then
+    printf '%s\\n' "$PWD" > "$CWD_LOG"
+    env | sort > "$ENV_LOG"
+    if [ "$MODE" = fail-deploy ]; then exit 24; fi
+    if [ "$MODE" = run-build ]; then
       command=""
       previous=""
       for argument in "$@"; do
-        if [ "$previous" = --cmd ]; then
-          command="$argument"
-          break
-        fi
+        if [ "$previous" = --cmd ]; then command="$argument"; break; fi
         previous="$argument"
       done
-      BUN_OPTIONS="--preload=$AFFECT_FAKE_CONVEX_PRELOAD" \
-      NEXT_PUBLIC_CONVEX_URL="https://callback.convex.cloud" \
-      NEXT_PUBLIC_CONVEX_SITE_URL="https://callback.convex.site" \
-      sh -c "$command"
+      if [ "$MISSING_CALLBACK" = cloud ]; then CALLBACK_CLOUD=""; fi
+      if [ "$MISSING_CALLBACK" = site ]; then CALLBACK_SITE=""; fi
+      AFFECT_FAKE_DOTENV_PASS=1 BUN_OPTIONS="--preload=$PRELOAD" VITE_CONVEX_URL="$CALLBACK_CLOUD" VITE_CONVEX_SITE_URL="$CALLBACK_SITE" sh -c "$command"
     fi
     ;;
 esac
@@ -146,17 +228,69 @@ esac
     { mode: 0o755 },
   );
 
+  const buildKeys = [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "CI",
+    "VERCEL",
+    "VERCEL_ENV",
+    "VERCEL_GIT_COMMIT_REF",
+    "VERCEL_URL",
+    "VERCEL_PROJECT_PRODUCTION_URL",
+    "TOOL_SENTINEL",
+    "VITE_CONVEX_URL",
+    "VITE_CONVEX_SITE_URL",
+    "VITE_SITE_URL",
+    "VITE_POSTHOG_HOST",
+    "VITE_POSTHOG_KEY",
+    "SITE_URL",
+    "SERVER_SECRET",
+    "PROFILE_ONLY_SECRET",
+    "INHERITED_SECRET",
+    "VITE_UNREVIEWED",
+    "CONVEX_DEPLOY_KEY",
+    "DOTENV_PRIVATE_KEY",
+    "NODE_USE_ENV_PROXY",
+    "NODE_OPTIONS",
+    "BUN_OPTIONS",
+  ];
+
+  const buildSource = `const fs=require("node:fs");const names=${JSON.stringify(buildKeys)};const mode=process.env.VERCEL_ENV==="production"?"production":"development";const modePath=${JSON.stringify(path.join(root, "apps", "web"))}+"/.env."+mode;if(fs.existsSync(modePath)){for(const line of fs.readFileSync(modePath,"utf8").split("\\n")){const separator=line.indexOf("=");if(separator>0){const name=line.slice(0,separator);if(process.env[name]===undefined)process.env[name]=line.slice(separator+1)}}}fs.writeFileSync(${JSON.stringify(path.join(root, "build.marker"))},JSON.stringify({env:Object.fromEntries(names.map((name)=>[name,process.env[name]??null])),argv:process.argv.slice(1)}))`;
+  const buildMarker = path.join(root, "build-marker.cjs");
+  await writeFile(buildMarker, buildSource);
+  await writeFile(
+    path.join(root, "node_modules", ".bin", "vite"),
+    `#!/bin/sh\nset -eu\nif [ ${buildExitStatus} -ne 0 ]; then exit ${buildExitStatus}; fi\nnode ${JSON.stringify(buildMarker)}\n`,
+    { mode: 0o755 },
+  );
   await writeFile(
     path.join(root, "package.json"),
     JSON.stringify({
+      dependencies: { convex: "1.49.0" },
+      devDependencies: { vite: "8.3.6" },
       name: "fixture",
       private: true,
       scripts: {
-        build:
-          "node -e \"require('fs').writeFileSync('build.marker', [process.env.NEXT_PUBLIC_CONVEX_URL || '', process.env.NEXT_PUBLIC_CONVEX_SITE_URL || '', process.env.SITE_URL || ''].join('|'))\"",
+        build: "bun run --filter @affect/web build",
         preinstall: "node -e \"require('fs').writeFileSync('install.marker', 'installed')\"",
       },
+      workspaces: ["apps/*"],
     }),
+  );
+  await writeFile(
+    path.join(root, "apps", "web", "package.json"),
+    JSON.stringify({
+      dependencies: { "@tanstack/react-start": "1.0.0" },
+      devDependencies: { vite: "8.3.6" },
+      name: "@affect/web",
+      scripts: { build: "vite build" },
+    }),
+  );
+  await mkdir(path.join(root, "convex"), { recursive: true });
+  await writeFile(
+    path.join(root, "convex", "env.config.ts"),
+    `const string = (isOptional: "required" | "optional") => ({ isConvexValidator: true, isOptional, kind: "string" }); export default { SERVER_SECRET: string("required"), SITE_URL: string("optional"), TRUSTED_ORIGINS: string("optional"), SPECIAL_VALUE: string("optional"), INTERPOLATED_VALUE: string("optional"), FAIL_VALUE: string("optional"), BUILD_VALUE: string("optional"), OPTIONAL_SETTING: string("optional") };`,
   );
 
   const envDir = path.join(root, "env", environment);
@@ -200,6 +334,7 @@ esac
     convexMode,
     envFile,
     privateKey,
+    providerOptions,
     root,
   };
 };

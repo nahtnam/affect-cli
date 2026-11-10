@@ -42,7 +42,7 @@ describe("affect run", () => {
 
   it("preserves inherited values over encrypted values", async () => {
     const f = await fixture({
-      values: { AFFECT_VALUE: "secret-value", NEXT_PUBLIC_CONVEX_URL: "encrypted-url" },
+      values: { AFFECT_VALUE: "secret-value", VITE_CONVEX_URL: "encrypted-url" },
     });
 
     const result = runCli(
@@ -52,9 +52,9 @@ describe("affect run", () => {
         "--",
         "node",
         "-e",
-        "process.stdout.write(process.env.NEXT_PUBLIC_CONVEX_URL + '|' + process.env.AFFECT_VALUE)",
+        "process.stdout.write(process.env.VITE_CONVEX_URL + '|' + process.env.AFFECT_VALUE)",
       ],
-      { ...fixtureEnv(f), NEXT_PUBLIC_CONVEX_URL: "inherited-url" },
+      { ...fixtureEnv(f), VITE_CONVEX_URL: "inherited-url" },
     );
 
     expect(result.status).toBe(0);

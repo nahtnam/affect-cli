@@ -12,7 +12,7 @@ import { setup } from "./setup";
 import { syncDev } from "./sync-dev";
 
 const program = Command.make("affect").pipe(
-  Command.withDescription("Environment and deployment commands for Affect applications."),
+  Command.withDescription("Environment and native deployment commands for Affect applications."),
   Command.withSubcommands([
     Command.make("env", {}, () => exports().pipe(Effect.flatMap(Console.log))).pipe(
       Command.withDescription("Print shell exports for the selected encrypted environment."),
@@ -49,7 +49,9 @@ const program = Command.make("affect").pipe(
       { build: Flag.Boolean("build").pipe(Flag.withDefault(false)) },
       ({ build }) => deploy(build),
     ).pipe(
-      Command.withDescription("Deploy the selected Vercel preview or production environment."),
+      Command.withDescription(
+        "Run native Convex deploy and the TanStack build for the selected Vercel target; does not publish frontend output. --build is the internal callback.",
+      ),
     ),
   ]),
   Command.run({ version }),

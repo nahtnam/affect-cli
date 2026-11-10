@@ -9,7 +9,7 @@ import { read } from "./environment";
 const failure = (cause: string) => new CliError.UserError({ cause });
 
 const reserved =
-  /^(?:CONVEX_|DOTENV_|NEXT_PUBLIC_|PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|VERCEL_|GITHUB_|NODE_|BUN_|AFFECT_|CI$|PATH$|HOME$|PWD$|SHELL$|ENV$|TMPDIR$|(?:HTTPS?|ALL|NO)_PROXY$)/u;
+  /^(?:CONVEX_|DOTENV_|(?:[A-Z0-9]+_)*PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|VERCEL_|GITHUB_|NODE_|BUN_|AFFECT_|CI$|PATH$|HOME$|PWD$|SHELL$|ENV$|TMPDIR$|(?:HTTPS?|ALL|NO)_PROXY$)/u;
 
 const SettingName = Schema.String.check(Schema.makeFilter((name) => !reserved.test(name)));
 
@@ -35,8 +35,8 @@ const Origin = Schema.URLFromString.check(
 
 const Profile = Schema.Struct({
   CONVEX_DEPLOY_KEY: Schema.String.check(Schema.isPattern(/^dev:[a-z0-9-]+\|.+$/u)),
-  NEXT_PUBLIC_CONVEX_SITE_URL: Origin,
-  NEXT_PUBLIC_CONVEX_URL: Origin,
+  VITE_CONVEX_SITE_URL: Origin,
+  VITE_CONVEX_URL: Origin,
 });
 
 const Slug = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/u));
@@ -174,7 +174,7 @@ export const syncDev = Effect.fn("DevelopmentEnv.sync")(
       yield* request("https://api.convex.dev/api/deployment/url_for_key", bearer, lookup),
     );
 
-    if (cloud.origin !== profile.NEXT_PUBLIC_CONVEX_URL.origin) {
+    if (cloud.origin !== profile.VITE_CONVEX_URL.origin) {
       return yield* failure("Development key and public Convex URL do not match.");
     }
 
@@ -205,7 +205,7 @@ export const syncDev = Effect.fn("DevelopmentEnv.sync")(
 
     if (
       urls.convexCloudUrl.origin !== cloud.origin ||
-      urls.convexSiteUrl.origin !== profile.NEXT_PUBLIC_CONVEX_SITE_URL.origin
+      urls.convexSiteUrl.origin !== profile.VITE_CONVEX_SITE_URL.origin
     ) {
       return yield* failure("Development canonical Convex URLs do not match the profile.");
     }
