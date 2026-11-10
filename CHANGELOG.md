@@ -1,5 +1,11 @@
 # affect-cli
 
+## 0.0.5
+
+### Patch Changes
+
+- 21c0815: Require canonical Vite Convex URLs for development sync and build the TanStack workspace through the verified native Convex deploy callback.
+
 ## 0.0.4
 
 ### Patch Changes
