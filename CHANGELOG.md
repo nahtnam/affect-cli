@@ -1,5 +1,11 @@
 # affect-cli
 
+## 0.0.6
+
+### Patch Changes
+
+- f7fef75: Allow project-specific root and web build scripts and explicit public build settings through the existing environment declaration. Preserve isolated build environments and reject recursive deploy callbacks.
+
 ## 0.0.5
 
 ### Patch Changes
