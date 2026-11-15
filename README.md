@@ -28,7 +28,18 @@ export default {
   API_TOKEN: v.string(),
   OPTIONAL_SETTING: v.optional(v.string()),
 } satisfies EnvDefinition;
+
+export const publicEnv = [
+  "VITE_SITE_URL",
+  "VITE_POSTHOG_HOST",
+  "VITE_POSTHOG_KEY",
+  "VITE_TURNSTILE_SITE_KEY",
+] as const;
 ```
+
+`affect deploy` reads `publicEnv` from this same module as the complete list of public build settings. Only values present in the selected encrypted profile are forwarded, including empty strings; ambient public settings are not forwarded. Names must be uppercase `VITE_` variables, unique, and outside the reserved `VITE_CONVEX_`, `VITE_DOTENV_`, and `VITE_AFFECT_` namespaces. The CLI always supplies verified `VITE_CONVEX_URL` and `VITE_CONVEX_SITE_URL` independently. Modules without `publicEnv` retain the default names `VITE_SITE_URL`, `VITE_POSTHOG_HOST`, and `VITE_POSTHOG_KEY`; an empty array selects no additional public settings.
+
+The root and `apps/web` build scripts may include project-specific preparation and Vite options. Both must be nonempty and retain the Affect TanStack workspace structure. The callback runs `bun run build` at the root; calling `affect deploy` from that build is rejected to prevent recursion.
 
 Use the profile's development-scoped deploy key and canonical public Convex cloud/site origins (`VITE_CONVEX_URL` and `VITE_CONVEX_SITE_URL`). Before any update the command verifies the provider's cloud/development identity, owning team/project and both canonical URLs. Reserved credential/control/client-public names are rejected even if declared. Only present declared server settings are sent, using the native Convex JSON environment API without temporary plaintext files; native Convex remains responsible for provider limits and application value validation. The command needs metadata and environment read/write permissions; it does not create credentials or fall back to a broader login. Profile values use the same dotenvx decryption and interpolation as `affect env`. The profile remains encrypted with dotenvx; only settings declared by `convex/env.config.ts` cross into the backend.
 

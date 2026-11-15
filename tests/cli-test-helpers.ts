@@ -11,6 +11,9 @@ interface FixtureOptions {
   values?: Record<string, string>;
   convexMode?: string;
   buildExitStatus?: number;
+  rootBuild?: string;
+  webBuild?: string;
+  publicEnv?: readonly string[];
   provider?: {
     callbackCloud?: string;
     callbackSite?: string;
@@ -89,11 +92,19 @@ const readPrivateKey = async (keysFile: string) => {
   return /^DOTENV_PRIVATE_KEY=(?<privateKey>.+)$/mu.exec(source)?.groups?.["privateKey"];
 };
 
+const buildScript = (script: string | undefined, fallback: string) => script ?? fallback;
+
+const publicDeclaration = (names: readonly string[] | undefined) =>
+  names === undefined ? "" : ` export const publicEnv = ${JSON.stringify(names)};`;
+
 export const makeFixture = async ({
   environment = "development",
   values,
   convexMode = "",
   buildExitStatus = 0,
+  rootBuild,
+  webBuild,
+  publicEnv,
   provider = {},
 }: FixtureOptions = {}): Promise<Fixture> => {
   const root = await mkdtemp(path.join(tmpdir(), "affect-cli-"));
@@ -244,6 +255,9 @@ esac
     "VITE_SITE_URL",
     "VITE_POSTHOG_HOST",
     "VITE_POSTHOG_KEY",
+    "VITE_TURNSTILE_SITE_KEY",
+    "VITE_CUSTOM_PUBLIC",
+    "VITE_AMBIENT_ONLY",
     "SITE_URL",
     "SERVER_SECRET",
     "PROFILE_ONLY_SECRET",
@@ -272,7 +286,7 @@ esac
       name: "fixture",
       private: true,
       scripts: {
-        build: "bun run --filter @affect/web build",
+        build: buildScript(rootBuild, "bun run --filter @affect/web build"),
         preinstall: "node -e \"require('fs').writeFileSync('install.marker', 'installed')\"",
       },
       workspaces: ["apps/*"],
@@ -284,13 +298,13 @@ esac
       dependencies: { "@tanstack/react-start": "1.0.0" },
       devDependencies: { vite: "8.3.6" },
       name: "@affect/web",
-      scripts: { build: "vite build" },
+      scripts: { build: buildScript(webBuild, "vite build") },
     }),
   );
   await mkdir(path.join(root, "convex"), { recursive: true });
   await writeFile(
     path.join(root, "convex", "env.config.ts"),
-    `const string = (isOptional: "required" | "optional") => ({ isConvexValidator: true, isOptional, kind: "string" }); export default { SERVER_SECRET: string("required"), SITE_URL: string("optional"), TRUSTED_ORIGINS: string("optional"), SPECIAL_VALUE: string("optional"), INTERPOLATED_VALUE: string("optional"), FAIL_VALUE: string("optional"), BUILD_VALUE: string("optional"), OPTIONAL_SETTING: string("optional") };`,
+    `const string = (isOptional: "required" | "optional") => ({ isConvexValidator: true, isOptional, kind: "string" }); export default { SERVER_SECRET: string("required"), SITE_URL: string("optional"), TRUSTED_ORIGINS: string("optional"), SPECIAL_VALUE: string("optional"), INTERPOLATED_VALUE: string("optional"), FAIL_VALUE: string("optional"), BUILD_VALUE: string("optional"), OPTIONAL_SETTING: string("optional") };${publicDeclaration(publicEnv)}`,
   );
 
   const envDir = path.join(root, "env", environment);

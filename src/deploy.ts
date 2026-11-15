@@ -22,7 +22,7 @@ const deploymentNames = [
 ] as const;
 
 const canonicalNames = ["VITE_CONVEX_URL", "VITE_CONVEX_SITE_URL"] as const;
-const publicBuildNames = ["VITE_SITE_URL", "VITE_POSTHOG_HOST", "VITE_POSTHOG_KEY"] as const;
+const defaultPublicEnv = ["VITE_SITE_URL", "VITE_POSTHOG_HOST", "VITE_POSTHOG_KEY"] as const;
 
 const hostNames = [
   "CI",
@@ -108,6 +108,13 @@ const Declaration = Schema.Record(
   }),
 );
 
+const PublicEnv = Schema.Array(
+  Schema.String.check(
+    Schema.isPattern(/^VITE_[A-Z][A-Z0-9_]*$/u),
+    Schema.makeFilter((name) => !/^VITE_(?:CONVEX|DOTENV|AFFECT)(?:_|$)/u.test(name)),
+  ),
+).check(Schema.makeFilter((names) => new Set(names).size === names.length));
+
 const RootManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   devDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -161,7 +168,6 @@ const inheritedNames = [
   "BUN_OPTIONS",
   ...deploymentNames,
   ...canonicalNames,
-  ...publicBuildNames,
   ...hostNames,
   ...optionalSystemNames,
   ...proxyNames,
@@ -341,11 +347,13 @@ const readDeclaration = Effect.fn("Deploy.readDeclaration")(function* readDeclar
     },
   });
 
-  const decoded = yield* Schema.decodeUnknownEffect(Schema.Struct({ default: Declaration }))(
-    imported,
-  ).pipe(
+  const decoded = yield* Schema.decodeUnknownEffect(
+    Schema.Struct({ default: Declaration, publicEnv: Schema.optional(PublicEnv) }),
+  )(imported).pipe(
     Effect.mapError(() =>
-      failure("Cannot load a valid declaration-only Convex environment definition."),
+      failure(
+        "Cannot load a valid declaration-only Convex environment definition or publicEnv list.",
+      ),
     ),
   );
 
@@ -358,7 +366,7 @@ const readDeclaration = Effect.fn("Deploy.readDeclaration")(function* readDeclar
     ),
   );
 
-  return decoded.default;
+  return { declaration: decoded.default, publicEnv: decoded.publicEnv ?? defaultPublicEnv };
 });
 
 const readManifest = Effect.fn("Deploy.readManifest")(function* readManifest<A>(
@@ -399,10 +407,10 @@ const preflight = Effect.fn("Deploy.preflight")(function* preflight() {
 
   if (
     !Array.contains("apps/*")(rootManifest.workspaces) ||
-    rootManifest.scripts["build"] !== "bun run --filter @affect/web build" ||
+    (rootManifest.scripts["build"] ?? empty).trim() === empty ||
     dependencies["vite"] === undefined ||
     dependencies["convex"] === undefined ||
-    webManifest.scripts["build"] !== "vite build" ||
+    (webManifest.scripts["build"] ?? empty).trim() === empty ||
     webDependencies["@tanstack/react-start"] === undefined ||
     webDependencies["vite"] === undefined
   ) {
@@ -411,7 +419,7 @@ const preflight = Effect.fn("Deploy.preflight")(function* preflight() {
 
   const declaration = yield* readDeclaration(root);
 
-  return { declaration, root };
+  return { ...declaration, root };
 });
 
 const selectedBackendSettings = (
@@ -612,11 +620,13 @@ const buildEnvironment = (
   values: Record<string, string>,
   verified: VerifiedDeployment,
   scratchHome: string,
+  publicEnv: readonly string[],
 ) => {
   const child: Record<string, string> = {};
   copyDefined(selected.inherited, ["PATH", ...optionalSystemNames], values, child);
   child[process.platform === "win32" ? "USERPROFILE" : "HOME"] = scratchHome;
   child["VERCEL_ENV"] = selected.target;
+  child[callbackMarker] = "build";
 
   if (selected.target === "preview") {
     child["VERCEL_GIT_COMMIT_REF"] = selected.branch;
@@ -628,14 +638,11 @@ const buildEnvironment = (
     child[name] = name === "VITE_CONVEX_URL" ? verified.cloud : verified.site;
   }
 
-  for (const name of publicBuildNames) {
+  for (const name of publicEnv) {
     const profileValue = values[name];
-    const inheritedValue = selected.inherited[name] ?? empty;
 
     if (profileValue !== undefined) {
       child[name] = profileValue;
-    } else if (inheritedValue !== empty) {
-      child[name] = inheritedValue;
     }
   }
 
@@ -681,7 +688,7 @@ const runBuildCallback = Effect.fn("Deploy.runBuildCallback")(function* runBuild
   }
 
   const selected = yield* profile();
-  const { declaration, root } = yield* preflight();
+  const { declaration, publicEnv, root } = yield* preflight();
   yield* validateRequiredSettings(selected.values, declaration);
 
   const cloudText = yield* Config.NonEmptyString("VITE_CONVEX_URL").pipe(
@@ -719,7 +726,7 @@ const runBuildCallback = Effect.fn("Deploy.runBuildCallback")(function* runBuild
     "Could not clean the isolated build environment.",
   );
 
-  const env = buildEnvironment(selected, selected.values, verified, home);
+  const env = buildEnvironment(selected, selected.values, verified, home, publicEnv);
 
   const child = yield* ChildProcess.make("bun", ["run", "build"], {
     cwd: root,
@@ -744,6 +751,7 @@ const nativeEnvironment = (
   values: Record<string, string>,
   privateKey: string,
   home: string,
+  publicEnv: readonly string[],
 ) => {
   const env: Record<string, string> = {};
 
@@ -785,8 +793,10 @@ const nativeEnvironment = (
     env[name] = empty;
   }
 
-  for (const name of publicBuildNames) {
-    env[name] = values[name] ?? selected.inherited[name] ?? empty;
+  for (const name of publicEnv) {
+    if (values[name] !== undefined) {
+      env[name] = values[name];
+    }
   }
 
   return env;
@@ -796,6 +806,7 @@ const deployNative = Effect.fn("Deploy.native")(function* deployNative(
   selected: Profile,
   values: Record<string, string>,
   root: string,
+  publicEnv: readonly string[],
 ) {
   const privateKey = yield* Config.NonEmptyString("DOTENV_PRIVATE_KEY").pipe(
     Effect.mapError(() => failure("Set the matching DOTENV_PRIVATE_KEY for the selected profile.")),
@@ -806,7 +817,7 @@ const deployNative = Effect.fn("Deploy.native")(function* deployNative(
     "Could not clean the isolated Convex configuration home.",
   );
 
-  const env = nativeEnvironment(selected, values, privateKey, home);
+  const env = nativeEnvironment(selected, values, privateKey, home, publicEnv);
 
   const args = [
     "--no-install",
@@ -838,12 +849,18 @@ const deployNative = Effect.fn("Deploy.native")(function* deployNative(
 });
 
 export const deploy = Effect.fn("Deploy.run")(function* deploy(build: boolean) {
+  const callbackMode = yield* Config.String(callbackMarker).pipe(Config.withDefault(empty));
+
+  if (callbackMode === "build" || (!build && callbackMode === "1")) {
+    return yield* failure("The root build script must not call affect deploy recursively.");
+  }
+
   if (build) {
     return yield* runBuildCallback();
   }
 
   const selected = yield* profile();
-  const { declaration } = yield* preflight();
+  const { declaration, publicEnv } = yield* preflight();
   yield* validateRequiredSettings(selected.values, declaration);
 
   const requiredCollisions = [
@@ -864,5 +881,5 @@ export const deploy = Effect.fn("Deploy.run")(function* deploy(build: boolean) {
     `Convex target: ${selected.target}${selected.target === "preview" ? ` (${selected.branch})` : ""}; selected by env/${selected.target}/.env.`,
   );
 
-  return yield* deployNative(selected, selected.values, root);
+  return yield* deployNative(selected, selected.values, root, publicEnv);
 }, Effect.scoped);
