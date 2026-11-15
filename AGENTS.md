@@ -9,6 +9,7 @@
 - Preserve strict TypeScript and the configured Ultracite/Effect lint presets.
   Use focused tests for behavior changes; do not weaken rules or suppress
   diagnostics to make a check pass.
+- When porting a patch from an older checkout, reconcile every deletion against current release-branch fixes, including test options; matching generated artifacts and passing CI do not establish preservation.
 - Treat package edits, versioning, publishing, and other release transitions as
   separate actions. Do not publish, push, or deploy without explicit approval.
 - Default all CLI changesets and releases to patch versions. Minor or major
