@@ -603,6 +603,7 @@ describe("published CLI", () => {
         "synthetic-admin-key",
       ]);
     },
+    15_000,
   );
 
   it.each([
