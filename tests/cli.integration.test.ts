@@ -603,7 +603,6 @@ describe("published CLI", () => {
         "synthetic-admin-key",
       ]);
     },
-    15_000,
   );
 
   it.each([
@@ -743,6 +742,130 @@ describe("published CLI", () => {
       const calls = await readFixtureFile(f, "convex-http.log").catch(() => "");
       expectSecretFree(calls, ["update_environment_variables", "https://redirect.invalid"]);
       expectSecretFree(result.stdout + result.stderr, ["synthetic-backend-secret"]);
+    },
+  );
+
+  it("runs project-defined build scripts with only declared profile public values", async () => {
+    const f = await fixture({
+      convexMode: "run-build",
+      environment: "production",
+      publicEnv: ["VITE_TURNSTILE_SITE_KEY", "VITE_CUSTOM_PUBLIC", "VITE_AMBIENT_ONLY"],
+      rootBuild: "bun run --cwd apps/web build",
+      values: {
+        CONVEX_DEPLOY_KEY: "prod:synthetic-prod-123|synthetic-prod-key",
+        SERVER_SECRET: "synthetic-backend-secret",
+        VITE_CUSTOM_PUBLIC: "",
+        VITE_POSTHOG_KEY: "synthetic-omitted-default",
+        VITE_TURNSTILE_SITE_KEY: "synthetic-turnstile-site-key",
+        VITE_UNREVIEWED: "synthetic-undeclared",
+      },
+      webBuild: "vite build --mode production",
+    });
+
+    const result = runCli(f, ["deploy"], {
+      ...fixtureEnv(f),
+      VERCEL_ENV: "production",
+      VITE_AMBIENT_ONLY: "synthetic-ambient-only",
+      VITE_CUSTOM_PUBLIC: "synthetic-ambient-custom",
+      VITE_TURNSTILE_SITE_KEY: "synthetic-ambient-turnstile",
+    });
+
+    expect(result.status).toBe(0);
+
+    const build = parseBuildMarker(await readFixtureFile(f, "build.marker"));
+
+    expect(build.env).toMatchObject({
+      CONVEX_DEPLOY_KEY: null,
+      DOTENV_PRIVATE_KEY: null,
+      SERVER_SECRET: null,
+      VITE_AMBIENT_ONLY: null,
+      VITE_CONVEX_SITE_URL: "https://callback.convex.site",
+      VITE_CONVEX_URL: "https://callback.convex.cloud",
+      VITE_CUSTOM_PUBLIC: "",
+      VITE_POSTHOG_KEY: null,
+      VITE_TURNSTILE_SITE_KEY: "synthetic-turnstile-site-key",
+      VITE_UNREVIEWED: null,
+    });
+    const httpLog = await readFixtureFile(f, "convex-http.log");
+
+    const calls = httpLog
+      .trim()
+      .split("\n")
+      .map((line) => parseHttpCall(line));
+
+    expect(calls.at(-1)?.body).toStrictEqual({
+      changes: [{ name: "SERVER_SECRET", value: "synthetic-backend-secret" }],
+    });
+  });
+
+  it("treats an empty publicEnv list as no additional public settings", async () => {
+    const f = await fixture({
+      convexMode: "run-build",
+      environment: "production",
+      publicEnv: [],
+      values: {
+        CONVEX_DEPLOY_KEY: "prod:synthetic-prod-123|synthetic-prod-key",
+        SERVER_SECRET: "synthetic-backend-secret",
+        VITE_POSTHOG_KEY: "synthetic-omitted-default",
+        VITE_SITE_URL: "https://omitted.invalid",
+      },
+    });
+
+    const result = runCli(f, ["deploy"], { ...fixtureEnv(f), VERCEL_ENV: "production" });
+
+    expect(result.status).toBe(0);
+
+    const build = parseBuildMarker(await readFixtureFile(f, "build.marker"));
+
+    expect(build.env).toMatchObject({
+      VITE_CONVEX_SITE_URL: "https://callback.convex.site",
+      VITE_CONVEX_URL: "https://callback.convex.cloud",
+      VITE_POSTHOG_KEY: null,
+      VITE_SITE_URL: null,
+    });
+  });
+
+  it("rejects invalid public declarations before any provider operation", async () => {
+    const f = await fixture({
+      environment: "production",
+      publicEnv: ["VITE_CONVEX_URL"],
+      values: {
+        CONVEX_DEPLOY_KEY: "prod:synthetic-prod-123|synthetic-prod-key",
+        SERVER_SECRET: "synthetic-backend-secret",
+      },
+    });
+
+    expectFailure(
+      runCli(f, ["deploy"], { ...fixtureEnv(f), VERCEL_ENV: "production" }),
+      /publicEnv list/u,
+    );
+    await expect(readConvexLog(f)).resolves.toBe("");
+    await expect(fixtureExists(readFixtureFile(f, "convex-http.log"))).resolves.toBeFalsy();
+  });
+
+  it.each(["affect deploy", "affect deploy --build"])(
+    "stops recursive %s calls from the root build before loading credentials",
+    async (command) => {
+      const f = await fixture({
+        convexMode: "run-build",
+        environment: "production",
+        rootBuild: `bunx --no-install ${command}`,
+        values: {
+          CONVEX_DEPLOY_KEY: "prod:synthetic-prod-123|synthetic-prod-key",
+          SERVER_SECRET: "synthetic-backend-secret",
+        },
+      });
+
+      expectFailure(
+        runCli(f, ["deploy"], { ...fixtureEnv(f), VERCEL_ENV: "production" }),
+        /must not call affect deploy recursively/u,
+      );
+      await expect(readFixtureFile(f, "convex.count")).resolves.toBe("1\n");
+      await expect(fixtureExists(readFixtureFile(f, "build.marker"))).resolves.toBeFalsy();
+
+      const httpLog = await readFixtureFile(f, "convex-http.log");
+
+      expect(httpLog.trim().split("\n")).toHaveLength(5);
     },
   );
 
