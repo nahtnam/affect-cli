@@ -1,5 +1,11 @@
 # affect-cli
 
+## 0.0.7
+
+### Patch Changes
+
+- 946682c: Add hosted environment onboarding and recovery with scoped credentials, separate profile keys, preserved existing settings, and optional frontend-host key delivery. Prepare branch preview origins consistently across backend authentication, browser builds and encrypted runtime configuration.
+
 ## 0.0.6
 
 ### Patch Changes
