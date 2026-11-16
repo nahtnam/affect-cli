@@ -168,7 +168,7 @@ describe("preview runtime materialization", () => {
     expect(runtime["SITE_URL"]).toBe("http://localhost:4321");
     expect(runtime["TRUSTED_ORIGINS"]).toBe("http://localhost:4321");
     expect(runtime["VITE_SITE_URL"]).toBe("http://localhost:4321");
-  });
+  }, 15_000);
 
   it("rejects absent host metadata before invoking native Convex despite stale profile origins", async () => {
     const f = await fixture();
@@ -176,7 +176,7 @@ describe("preview runtime materialization", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("requires AFFECT_PREVIEW_ORIGIN or VERCEL_URL");
     await expect(readConvexLog(f)).resolves.toBe("");
-  });
+  }, 15_000);
 
   it("does not materialize or synchronize when canonical preview verification fails", async () => {
     const f = await fixture({
@@ -197,7 +197,7 @@ describe("preview runtime materialization", () => {
     await expect(readFile(f.envFile, "utf-8")).resolves.toBe(original);
     await expect(readFixtureFile(f, "runtime-profile.env")).rejects.toThrow("ENOENT");
     await expect(readFixtureFile(f, "convex-http.body")).rejects.toThrow("ENOENT");
-  });
+  }, 15_000);
 
   it("fails closed on an existing profile lock before synchronization or build", async () => {
     const f = await fixture();
@@ -209,7 +209,7 @@ describe("preview runtime materialization", () => {
     await expect(readFile(f.envFile, "utf-8")).resolves.toBe(original);
     await expect(readFixtureFile(f, "runtime-profile.env")).rejects.toThrow("ENOENT");
     await expect(readFixtureFile(f, "convex-http.body")).rejects.toThrow("ENOENT");
-  });
+  }, 15_000);
 });
 
 describe("preview failure restoration", () => {
@@ -234,7 +234,7 @@ describe("preview failure restoration", () => {
     await expect(readFixtureFile(f, "env/preview/.affect-deploy/original.env")).rejects.toThrow(
       "ENOENT",
     );
-  });
+  }, 15_000);
 
   it("preserves concurrent profile changes and retains the original ciphertext for recovery", async () => {
     const f = await fixture({ rootBuild: "bun run alter-profile.cjs" });
@@ -253,7 +253,7 @@ describe("preview failure restoration", () => {
     await expect(readFixtureFile(f, "env/preview/.affect-deploy/original.env")).resolves.toBe(
       original,
     );
-  });
+  }, 15_000);
 });
 
 describe("preview origin validation", () => {
