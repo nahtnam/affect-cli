@@ -9,6 +9,7 @@ bunx --no-install affect --help
 
 Run commands from the application repository root:
 
+- `affect env init` provisions or adopts explicitly selected hosted Convex environments and creates encrypted, recoverable profiles. `affect env restore` retrieves existing profiles and matching keys without provisioning or changing provider settings. See [Hosted onboarding](#hosted-onboarding).
 - `affect env` prints shell exports from `env/{development,preview,production,ci}/.env`. It requires the matching `DOTENV_PRIVATE_KEY` when that file exists. Treat its output as secrets.
 - `affect env sync-dev [--force]` reads only `env/development/.env` with its matching `DOTENV_PRIVATE_KEY` and synchronizes declared server settings to its verified hosted development backend. The profile must provide the canonical `VITE_CONVEX_URL` and `VITE_CONVEX_SITE_URL` pair and a development-scoped deploy key. It never deploys code or builds the frontend. It ignores inherited CI, production, account-token and provider-host selection. Missing required settings fail; absent optional settings preserve remote values; explicit empty strings remain values. Existing differing values refuse the entire batch unless `--force` is supplied. Omission never deletes a remote setting. Output contains only the verified target and setting counts.
 - `affect run -- <command> [args...]` loads that environment and runs a command. Existing environment values take precedence; arguments, standard I/O, and exit codes are preserved.
@@ -49,7 +50,30 @@ From the application root, run the TanStack development script with the selected
 bunx --no-install affect run -- bun run dev
 ```
 
-`affect run` supplies the selected profile to the application process; it does not start a Convex watcher. The canonical Convex URLs are Vite build-time values. A host may separately provide runtime-only listener settings for its server, but `affect deploy` does not create a runtime env file or copy the deploy key into the frontend. Vercel supplies `VERCEL_ENV` and, for previews, `VERCEL_GIT_COMMIT_REF`; the CLI uses those host values to select the target and branch, then reads the matching deploy key from the encrypted profile.
+`affect run` supplies the selected profile to the application process; it does not start a Convex watcher. The canonical Convex URLs are Vite build-time values. Vercel supplies `VERCEL_ENV` and, for previews, `VERCEL_GIT_COMMIT_REF`; the CLI uses those host values to select the target and branch, then reads the matching deploy key from the encrypted profile. Preview deployment uses the exact `AFFECT_PREVIEW_ORIGIN` override or Vercel's `VERCEL_URL` for the frontend origin, and native Convex deploy supplies the branch backend's canonical cloud/site URLs. The callback uses those origins for backend auth settings and the browser build, then temporarily encrypts a runtime profile with the existing preview key for the application's build packaging. It restores the original profile after the build and excludes deploy/provider credentials from that runtime payload. Branch backends are created or reused by native Convex without `--preview-create`.
+
+## Hosted onboarding
+
+In an Affect application, the first hosted setup can install its toolchain and dependencies before initializing profiles:
+
+```sh
+bash scripts/setup.sh --hosted \
+  --team 123 --create-project my-app \
+  --profiles development,preview,production \
+  --site-url https://my-app.example --non-interactive
+```
+
+Use your actual numeric team ID and hosted origin. To adopt a project, replace `--create-project` with `--project <numeric-id>`. Multiple candidate development or production deployments require an explicit `--dev-deployment` or `--prod-deployment`. The repository wrapper requires development among the selected profiles because its final step validates local development. Direct `affect env init` also supports preview-only or production-only selections. Interactive terminals can prompt for selections; automation must supply unambiguous choices. Run `affect env init --help` for the current flags.
+
+Authorization comes from an existing native Convex login, `CONVEX_ACCESS_TOKEN` containing a personal access token, or `AFFECT_CONVEX_TOKEN` containing a team token. Set credential values through your secret manager or environment rather than command arguments. The CLI verifies ownership before provisioning, saves the bootstrap credential in owner-only local state for future onboarding, and records only nonsecret target IDs, origins and profile choices in `affect.json`. A broad bootstrap credential never enters runtime profiles, builds or logs. Convex's [Management API](https://docs.convex.dev/platform-apis/overview) supplies scoped development, production and project-preview keys; frontend-host authorization remains separate.
+
+Each profile has its own dotenvx key. Development and production recovery records are stored as `AFFECT_ONBOARDING_V1` in the exact verified deployment's environment storage. The preview recovery record is a project default restricted to preview deployments and does not apply retroactively to existing deployments. It contains preview-family credentials only. Anyone authorized to read that provider environment can recover its key and encrypted profile; preview branches therefore share the preview family's trust boundary. Commit `affect.json` and the encrypted profile files that onboarding makes trackable. Keep `.env.keys` and `.setup.local` ignored. A fresh clone can use saved Convex authorization and `affect env restore --non-interactive` to recover matching local files. Ciphertext without a recoverable matching key fails; the CLI cannot reconstruct a lost dotenvx key.
+
+Reruns adopt existing records and credentials, fill missing declared settings, and refuse differing existing settings. They never rotate, revoke, delete or overwrite credentials or populated settings. New auth secrets are generated independently; optional email and telemetry credentials remain unconfigured until supplied. An owner-only JSON `--values <file>` can provide declared application settings and reviewed public settings. Development defaults to `http://localhost:3000`; use the app's `dev:localhost` command, or supply the exact known `--dev-origin` before first initialization. Existing origins are preserved.
+
+Initial setup is serialized within one checkout. Convex environment storage has no compare-and-swap operation, so simultaneous first initialization from different machines or checkouts is unsupported. Run the initial command once, then restore other clones. On partial failure, preserve the ignored local onboarding journal and rerun the same selection; it retains minted credentials for recovery.
+
+Optional Vercel key delivery requires a separate `VERCEL_TOKEN`, `--vercel-account <id>` and `--vercel-project <id>` (plus `--vercel-team <id>` for a team project). It verifies the exact account/project and delivers each decrypt key only to its matching development, preview or production scope. Existing conflicting or unreadable values fail without replacement. `--configure-host-build` requires Vercel Root Directory `apps/web` with source files outside that directory included, then adopts an empty build command as `cd ../.. && bunx --no-install affect deploy`. This runs the CLI from the workspace root while Nitro emits the host artifact under the web app. Unknown or incompatible settings and differing build commands fail before provisioning; the CLI does not change the root or source-inclusion settings. This does not link Git, change domains, publish a frontend, or deploy application code. Those remain separate authorized steps.
 
 ## Development and releases
 

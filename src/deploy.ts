@@ -5,6 +5,7 @@ import { ChildProcess } from "effect/process";
 
 import { CliError } from "effect/cli";
 import { load } from "./environment";
+import { materializePreviewProfile, previewOrigin, previewValues } from "./preview-profile";
 
 const controlPlane = "https://api.convex.dev";
 const callbackMarker = "AFFECT_CONVEX_DEPLOY_CALLBACK";
@@ -166,6 +167,7 @@ const inheritedNames = [
   "VERCEL_GIT_COMMIT_REF",
   "NODE_OPTIONS",
   "BUN_OPTIONS",
+  "AFFECT_PREVIEW_ORIGIN",
   ...deploymentNames,
   ...canonicalNames,
   ...hostNames,
@@ -323,16 +325,24 @@ const profile = Effect.fn("Deploy.profile")(function* profile() {
 
   yield* validateDeploymentControls(values, inherited);
 
-  return yield* validateProfileKey(
+  const selected = yield* validateProfileKey(
     target,
     inherited["VERCEL_GIT_COMMIT_REF"] ?? empty,
     deployKey,
     values,
     inherited,
   );
+
+  if (target === "preview") {
+    const origin = yield* previewOrigin(inherited);
+
+    return { ...selected, values: previewValues(selected.values, origin) };
+  }
+
+  return selected;
 });
 
-const readDeclaration = Effect.fn("Deploy.readDeclaration")(function* readDeclaration(
+export const readDeclaration = Effect.fn("Deploy.readDeclaration")(function* readDeclaration(
   root: string,
 ) {
   const path = yield* Path.Path;
@@ -712,6 +722,29 @@ const runBuildCallback = Effect.fn("Deploy.runBuildCallback")(function* runBuild
     Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
   );
 
+  if (selected.target === "preview") {
+    const privateKey = yield* Config.NonEmptyString("DOTENV_PRIVATE_KEY").pipe(
+      Effect.mapError(() =>
+        failure("Set the matching DOTENV_PRIVATE_KEY for the selected profile."),
+      ),
+    );
+
+    const runtimeValues: Record<string, string> = {
+      VITE_CONVEX_SITE_URL: verified.site,
+      VITE_CONVEX_URL: verified.cloud,
+    };
+
+    for (const name of [...Record.keys(declaration), ...publicEnv]) {
+      const value = selected.values[name];
+
+      if (value !== undefined) {
+        runtimeValues[name] = value;
+      }
+    }
+
+    yield* materializePreviewProfile(root, runtimeValues, privateKey);
+  }
+
   const settings = selectedBackendSettings(selected.values, declaration);
   yield* syncSettings(verified, settings).pipe(
     Effect.provide(FetchHttpClient.layer),
@@ -775,6 +808,7 @@ const nativeEnvironment = (
 
   if (selected.target === "preview") {
     env["VERCEL_GIT_COMMIT_REF"] = selected.branch;
+    env["AFFECT_PREVIEW_ORIGIN"] = values["VITE_SITE_URL"] ?? empty;
   }
 
   env[process.platform === "win32" ? "USERPROFILE" : "HOME"] = home;

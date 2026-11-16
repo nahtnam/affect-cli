@@ -6,6 +6,7 @@
       "name": "affect-cli",
       "dependencies": {
         "@dotenvx/dotenvx": "2.38.0",
+        "@dotenvx/primitives": "3.3.1",
       },
       "devDependencies": {
         "@changesets/cli": "3.0.3",

@@ -574,7 +574,9 @@ describe("published CLI", () => {
         {
           name: "TRUSTED_ORIGINS",
           value:
-            "https://preview.example.com,https://preview.example.com,https://feature-fixture.example.com",
+            target === "preview"
+              ? "https://preview.example.com"
+              : "https://preview.example.com,https://preview.example.com,https://feature-fixture.example.com",
         },
         { name: "INTERPOLATED_VALUE", value: "preview.example.com" },
         { name: "SPECIAL_VALUE", value: special },
