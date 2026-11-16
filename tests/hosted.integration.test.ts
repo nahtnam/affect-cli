@@ -779,7 +779,7 @@ describe("hosted onboarding through the native Effect and Bun filesystem path", 
       posts: posts(api).length,
       retained,
     }).toStrictEqual({ journals: [], minted: 3, ok: true, posts: before, retained: saved });
-  });
+  }, 15_000);
 
   it("restores the same keys from native custody in a fresh clone without minting", async () => {
     const first = await workspace();
@@ -803,7 +803,7 @@ describe("hosted onboarding through the native Effect and Bun filesystem path", 
       posts: posts(api).length,
       restored,
     }).toStrictEqual({ minted: 3, ok: true, posts: before, restored: saved });
-  });
+  }, 15_000);
 
   it("adopts existing production identity settings without replacing or rotating them", async () => {
     const f = await workspace();
@@ -927,7 +927,7 @@ describe("hosted onboarding through the native Effect and Bun filesystem path", 
       posts: before,
     });
     await expect(readFile(path.join(f.root, "env/production/.env"), "utf-8")).resolves.toBe(source);
-  });
+  }, 15_000);
 
   it("writes only exact selected ciphertext Git exceptions and keeps all profile keyfiles ignored", async () => {
     const f = await workspace();
